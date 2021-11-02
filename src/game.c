@@ -13,6 +13,9 @@ typedef struct
 	SDL_Rect Rect;
 	float XVel;
 	float YVel;
+	bool Cooldown;
+	float StartingXVelocity;
+	float VelocityCoeficient;
 } Ball;
 
 typedef struct
@@ -25,8 +28,12 @@ typedef struct
 	long int CurrentTick;
 	long int LastCollisionTick;
 	long int PauseTick;
+	unsigned int LastScoreMS;
 	bool CollisionDetected;
 	byte PlayerScore[2];
+	int WindowWidth;
+	int WindowHeight;
+	TTF_Font *Font;
 } Game;
 
 SDL_Window *MainWindow;
@@ -39,19 +46,51 @@ static inline void DestroyGame();
 static void Simulate();
 static inline void RestartBall();
 
-static inline void AddScore(unsigned int PlayerIndex)
+static inline void PaddleResize()
+{
+	foreach (PADDLES)
+	{
+		Pong.paddles[counter].Rect.w = Pong.WindowWidth * PADDLEW_COEFICIENT;
+		Pong.paddles[counter].Rect.h = Pong.WindowHeight * PADDLEH_COEFICIENT;
+	}
+	Pong.paddles[0].Rect.x = PADDLE_PADDING;
+	Pong.paddles[1].Rect.x = Pong.WindowWidth - Pong.paddles[1].Rect.w - PADDLE_PADDING;
+}
+
+static inline void BallResize()
+{
+	BALL.Rect.w = Pong.WindowWidth * BALL_RADIUS_COEFICIENT;
+	BALL.Rect.h = Pong.WindowWidth * BALL_RADIUS_COEFICIENT;
+}
+
+static inline void ResizeScreen()
+{
+	SDL_GetWindowSize(MainWindow, &Pong.WindowWidth, &Pong.WindowHeight);
+	BallResize();
+	PaddleResize();
+	printf("Screen resized to: %dx%d\n", Pong.WindowWidth, Pong.WindowHeight);
+}
+
+static inline void AddScore(unsigned short int PlayerIndex)
 {
 	Pong.PlayerScore[PlayerIndex - 1]++;
-	printf("\n\nPlayer %d scored!\n", PlayerIndex);
+	printf("\n\n=====================\n");
+	printf("Player %d scored!\n", PlayerIndex);
 	printf("Current score:\n");
 	printf("Player 1: %d | Player 2: %d\n", Pong.PlayerScore[0], Pong.PlayerScore[1]);
+	printf("=====================\n\n");
+	Pong.LastScoreMS = SDL_GetTicks();
+	BALL.Cooldown = true;
 	RestartBall();
 }
 
 static inline void RestartBall()
 {
-	BALL.Rect.x = CENTER(SCREEN_WIDTH, Pong.ball.Rect.w);
-	BALL.Rect.y = CENTER(SCREEN_HEIGHT, Pong.ball.Rect.h);
+	BALL.Rect.x = CENTER(Pong.WindowWidth, Pong.ball.Rect.w);
+	BALL.Rect.y = CENTER(Pong.WindowHeight, Pong.ball.Rect.h);
+	BALL.YVel = BALL_Y_RANDOM;
+	int RandomXVelCoef = (rand() > RAND_MAX / 2) ? 1 : -1;
+	BALL.XVel = BALL.StartingXVelocity * RandomXVelCoef;
 }
 
 static void Simulate()
@@ -59,31 +98,30 @@ static void Simulate()
 	// Simulate the paddles
 	foreach (Pong.paddles)
 	{
+#define PADDLE_VELOCITY ((1 * Pong.delta) * 0.5f * (Pong.WindowHeight / 570))
 		if (!(Pong.paddles[counter].PaddleUp && Pong.paddles[counter].PaddleDown))
 		{
 			if (Pong.paddles[counter].PaddleUp == true)
 			{
-				Pong.paddles[counter].y -= (1 * Pong.delta) * 0.5f;
+				Pong.paddles[counter].y -= PADDLE_VELOCITY;
 			}
 			else if (Pong.paddles[counter].PaddleDown == true)
 			{
-				Pong.paddles[counter].y += (1 * Pong.delta) * 0.5f;
+				Pong.paddles[counter].y += PADDLE_VELOCITY;
 			}
 		}
-		Pong.paddles[counter].y = CLAMP(Pong.paddles[counter].y, 0, SCREEN_HEIGHT - Pong.paddles[counter].Rect.h);
+		Pong.paddles[counter].y = CLAMP(Pong.paddles[counter].y, 0, Pong.WindowHeight - Pong.paddles[counter].Rect.h);
 		Pong.paddles[counter].Rect.y = Pong.paddles[counter].y;
 	}
 
-	// Simulate the "ball"
-
-	float xvel = BALL.XVel * Pong.delta;
-	float yvel = BALL.YVel * Pong.delta;
-
-	Pong.ball.Rect.x += xvel;
-	Pong.ball.Rect.y += yvel;
+	// Simulate the "ball". It only moves if the cooldown is set to false.
+	if (BALL.Cooldown == false)
+	{
+		BALL.Rect.x += BALL.XVel * Pong.delta * WIDTH_VELOCITY;
+		BALL.Rect.y += BALL.YVel * Pong.delta;
+	}
 
 	// Collision Detection
-
 	foreach (PADDLES) // Collision with the paddles
 	{
 		if ((RIGHT(BALL) >= PADDLES[counter].Rect.x && BALL.Rect.x <= RIGHT(PADDLES[counter])) &&
@@ -109,6 +147,11 @@ static void Simulate()
 					BottomRatio = (int)abs((((BOTTOM(PADDLES[counter]) - MIDDLE(BALL)) * 100) / (BOTTOM(PADDLES[counter]) - MIDDLE(PADDLES[counter]))) - 100);
 					BALL.YVel = BALL_VELOCITY * (BottomRatio / 100);
 				}
+
+				// This makes so when the ball is traveling solely on the x axis, it gains more speed, allowing more interesting plays.
+				BALL.XVel = (1.f - fabs(BALL.YVel) + BALL.VelocityCoeficient) * ((BALL.XVel > 0) ? 1 : -1);
+				BALL.XVel = CLAMP(BALL.XVel, -0.6f, 0.6f);
+				printf("Yvel = %f XVel = %f\n", BALL.YVel, BALL.XVel);
 				Pong.LastCollisionTick = Pong.CurrentTick;
 			}
 		}
@@ -119,7 +162,7 @@ static void Simulate()
 	}
 
 	// Collision with the screen borders
-	if (BOTTOM(BALL) >= SCREEN_HEIGHT || BALL.Rect.y <= 1 && Pong.CurrentTick > (Pong.LastCollisionTick + 12))
+	if (BOTTOM(BALL) >= Pong.WindowHeight || BALL.Rect.y <= 1 && Pong.CurrentTick > (Pong.LastCollisionTick + 12))
 	{
 		BALL.YVel = -BALL.YVel;
 		Pong.LastCollisionTick = Pong.CurrentTick;
@@ -128,7 +171,7 @@ static void Simulate()
 	{
 		AddScore(2);
 	}
-	if (BALL.Rect.x >= SCREEN_WIDTH)
+	if (BALL.Rect.x >= Pong.WindowWidth)
 	{
 		AddScore(1);
 	}
@@ -136,6 +179,8 @@ static void Simulate()
 
 static void InitGame()
 {
+	printf("Starting window with: %dx%d\n", Pong.WindowWidth, Pong.WindowHeight);
+
 	Pong.CurrentTick = 0;
 	Pong.IsRunning = true;
 	Pong.IsPaused = false;
@@ -144,33 +189,39 @@ static void InitGame()
 	{
 		Pong.PlayerScore[counter] = 0;
 	}
-	SDL_Init(SDL_INIT_EVERYTHING);
 
-	MainWindow = SDL_CreateWindow("PONG", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_OPENGL);
+	SDL_Init(SDL_INIT_EVERYTHING);
+	TTF_Init();
+
+	Pong.Font = TTF_OpenFont("AtariSmall.ttf", 16);
+
+	MainWindow = SDL_CreateWindow(APP_TITLE, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, Pong.WindowWidth, Pong.WindowHeight, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
 
 	Renderer = SDL_CreateRenderer(MainWindow, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
 
-	{ // Init all the "ball" properties
-		Pong.ball.Rect.w = 15;
-		Pong.ball.Rect.h = 15;
+	SDL_GetWindowSize(MainWindow, &Pong.WindowWidth, &Pong.WindowHeight);
 
-		Pong.ball.Rect.x = CENTER(SCREEN_WIDTH, Pong.ball.Rect.w);
-		Pong.ball.Rect.y = CENTER(SCREEN_HEIGHT, Pong.ball.Rect.h);
-		Pong.ball.XVel = 0.4f;
-		Pong.ball.YVel = (rand() % (4 + 1)) / 10 - 0.2f; // Generates random number between -0.2 to 0.2
+	{ // Init all the "ball" properties
+		Pong.ball.Rect.w = Pong.WindowWidth * BALL_RADIUS_COEFICIENT;
+		Pong.ball.Rect.h = Pong.WindowWidth * BALL_RADIUS_COEFICIENT;
+
+		Pong.ball.Rect.x = CENTER(Pong.WindowWidth, Pong.ball.Rect.w);
+		Pong.ball.Rect.y = CENTER(Pong.WindowHeight, Pong.ball.Rect.h);
+		BALL.StartingXVelocity = 0.24f;
+		Pong.ball.XVel = BALL.StartingXVelocity;
+		Pong.ball.YVel = BALL_Y_RANDOM; // Generates random number between -0.2 to 0.2
+		Pong.ball.Cooldown = false;
+		BALL.VelocityCoeficient = 0.03f;
 	}
 
 	// Defining paddles width as 50px and height as 190px and centering on the y axis
 	foreach (Pong.paddles)
 	{
-		Pong.paddles[counter].Rect.w = 22;
-		Pong.paddles[counter].Rect.h = 70;
-		Pong.paddles[counter].y = CENTER(SCREEN_HEIGHT, Pong.paddles[counter].Rect.h);
+		Pong.paddles[counter].y = CENTER(Pong.WindowHeight, Pong.paddles[counter].Rect.h);
 	}
 
 	// Init paddles x coordinate
-	Pong.paddles[0].Rect.x = PADDLE_PADDING;
-	Pong.paddles[1].Rect.x = SCREEN_WIDTH - Pong.paddles[1].Rect.w - PADDLE_PADDING;
+	PaddleResize();
 
 	Pong.paddles[0].KeyUp = SDLK_w;
 	Pong.paddles[0].KeyDown = SDLK_s;
@@ -193,6 +244,20 @@ static void RunGame()
 		{
 			switch (event.type)
 			{
+			case SDL_WINDOWEVENT:
+			{
+				switch (event.window.event)
+				{
+
+				case SDL_WINDOWEVENT_RESIZED:
+				{
+					printf("WINDOW EVENT\n");
+					ResizeScreen();
+					break;
+				}
+				}
+				break;
+			}
 			case SDL_KEYDOWN:
 			{
 				foreach (Pong.paddles)
@@ -245,21 +310,44 @@ static void RunGame()
 			Simulate();
 		}
 
-		SDL_SetRenderDrawColor(Renderer, 0, 0, 0, 255);
-		SDL_RenderClear(Renderer);
+		{ // This draws the entire screen
 
-		SDL_SetRenderDrawColor(Renderer, 255, 255, 255, 255);
+			//	Clearing the screen
+			SDL_SetRenderDrawColor(Renderer, 0, 0, 0, 255);
+			SDL_RenderClear(Renderer);
 
-		foreach (Pong.paddles)
-		{
-			SDL_RenderFillRect(Renderer, &Pong.paddles[counter].Rect);
+			SDL_SetRenderDrawColor(Renderer, 255, 255, 255, 255);
+
+			char ScoreString[3];
+			sprintf(ScoreString, "%d %d", Pong.PlayerScore[0], Pong.PlayerScore[1]);
+
+			SDL_Color White = {255, 255, 255};
+			SDL_Surface *ScoreMessage = TTF_RenderText_Solid(Pong.Font, (const char *)ScoreString, White);
+
+			SDL_Texture *ScoreTexture = SDL_CreateTextureFromSurface(Renderer, ScoreMessage);
+
+			SDL_Rect ScoreRect = {CENTER(Pong.WindowWidth, Pong.WindowWidth * 0.2), 20, Pong.WindowWidth * 0.2, (Pong.WindowHeight * 0.19)};
+
+			SDL_RenderCopy(Renderer, ScoreTexture, NULL, &ScoreRect);
+
+			foreach (Pong.paddles)
+			{
+				SDL_RenderFillRect(Renderer, &Pong.paddles[counter].Rect);
+			}
+			SDL_RenderFillRect(Renderer, &Pong.ball.Rect);
+			SDL_RenderPresent(Renderer);
 		}
-		SDL_RenderFillRect(Renderer, &Pong.ball.Rect);
-		SDL_RenderPresent(Renderer);
 
 		CurrentTime = SDL_GetTicks();
+
+		if (BALL.Cooldown == true && CurrentTime > Pong.LastScoreMS + 1200) // This allows a 1.2 second cooldown after a player scores
+		{
+			BALL.Cooldown = false;
+		}
+
 		if (CurrentTime > LastTime + 1000)
 		{
+			// Event to be run every second
 			LastTime = CurrentTime;
 		}
 
@@ -272,5 +360,6 @@ static void RunGame()
 static inline void DestroyGame()
 {
 	SDL_DestroyWindow(MainWindow);
+	TTF_Quit();
 	SDL_Quit();
 }

@@ -1,3 +1,3 @@
 pushd ..\build\
-game.exe
+game.exe -w 800 -h 600
 popd
