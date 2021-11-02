@@ -321,14 +321,16 @@ static void RunGame()
 			char ScoreString[3];
 			sprintf(ScoreString, "%d %d", Pong.PlayerScore[0], Pong.PlayerScore[1]);
 
-			SDL_Color White = {255, 255, 255};
-			SDL_Surface *ScoreMessage = TTF_RenderText_Solid(Pong.Font, (const char *)ScoreString, White);
+			SDL_Surface *ScoreMessage = TTF_RenderText_Solid(Pong.Font, (const char *)ScoreString, (SDL_Color){255, 255, 255});
 
 			SDL_Texture *ScoreTexture = SDL_CreateTextureFromSurface(Renderer, ScoreMessage);
 
 			SDL_Rect ScoreRect = {CENTER(Pong.WindowWidth, Pong.WindowWidth * 0.2), 20, Pong.WindowWidth * 0.2, (Pong.WindowHeight * 0.19)};
 
 			SDL_RenderCopy(Renderer, ScoreTexture, NULL, &ScoreRect);
+
+			SDL_FreeSurface(ScoreMessage);
+			SDL_DestroyTexture(ScoreTexture);
 
 			foreach (Pong.paddles)
 			{
