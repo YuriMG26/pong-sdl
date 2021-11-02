@@ -1,0 +1,6 @@
+.vscode/
+build/.vs/
+build/*.pdb
+build/*.ilk
+build/*.sln
+build/*.obj
